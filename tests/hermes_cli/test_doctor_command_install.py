@@ -29,6 +29,8 @@ def _setup_doctor_env(monkeypatch, tmp_path, venv_name="venv"):
     monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
     monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
     monkeypatch.setattr(doctor_mod, "_DHH", str(home))
+    # Mock _safe_which to return None by default so system path doesn't leak into tests
+    monkeypatch.setattr(doctor_mod, "_safe_which", lambda cmd: None)
 
     # Stub model_tools so doctor doesn't fail on import
     fake_model_tools = types.SimpleNamespace(
@@ -238,6 +240,29 @@ class TestDoctorCommandInstallation:
         out = _run_doctor(fix=False)
         assert "Command Installation" in out
         assert "$PREFIX/bin" in out
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
+    def test_hermes_in_path_skips_symlink_ok(self, monkeypatch, tmp_path):
+        """If hermes is found in PATH outside .local/bin, doctor passes without symlink."""
+        home, project, hermes_bin = _setup_doctor_env(monkeypatch, tmp_path)
+
+        # Do NOT create .local/bin symlink, but mock _safe_which to return a fake path
+        # pointing to somewhere like /home/kappa/bin/hermes.
+        fake_bin_dir = tmp_path / "bin"
+        fake_bin_dir.mkdir(parents=True)
+        fake_hermes = fake_bin_dir / "hermes"
+        fake_hermes.write_text("#!/bin/sh\n")
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(doctor_mod, "_safe_which", lambda cmd: str(fake_hermes) if cmd == "hermes" else None)
+
+        out = _run_doctor(fix=False)
+        assert "Command Installation" in out
+        section = out[out.find("Command Installation") : out.find("External Tools")]
+        assert "Venv entry point exists" in section
+        assert "hermes found in PATH via" in section
+        assert "skipping" in section
+        assert "not found" not in section
 
     def test_windows_skips_check(self, monkeypatch, tmp_path):
         """On Windows, the Command Installation section is skipped."""

@@ -1411,26 +1411,45 @@ def run_doctor(args):
                 # It's a regular file, not a symlink — possibly a wrapper script
                 check_ok(f"{_cmd_link_display}/hermes exists (non-symlink)")
             else:
-                check_fail(
-                    f"{_cmd_link_display}/hermes not found",
-                    "(hermes command may not work outside the venv)"
+                # Before failing: check if 'hermes' is reachable via PATH from
+                # a different directory (e.g. ~/bin on OpenBSD/non-Linux systems
+                # where ~/.local/bin is not the standard install location).
+                # We exclude any 'hermes' located inside the current virtual environment's
+                # bin directory or the target ~/.local/bin directory itself.
+                _hermes_in_path = _safe_which("hermes")
+                _path_hermes_dir = Path(_hermes_in_path).parent.resolve() if _hermes_in_path else None
+                _venv_bin_parent = _venv_bin.parent.resolve() if _venv_bin else None
+                _path_hermes_ok = (
+                    _hermes_in_path is not None
+                    and _path_hermes_dir != _cmd_link_dir.resolve()
+                    and (_venv_bin_parent is None or _path_hermes_dir != _venv_bin_parent)
                 )
-                if should_fix:
-                    _cmd_link_dir.mkdir(parents=True, exist_ok=True)
-                    _cmd_link.symlink_to(_venv_bin)
-                    check_ok(f"Created symlink: {_cmd_link_display}/hermes → {_venv_bin}")
-                    fixed_count += 1
-
-                    # Check if the link dir is on PATH
-                    _path_dirs = os.environ.get("PATH", "").split(os.pathsep)
-                    if str(_cmd_link_dir) not in _path_dirs:
-                        check_warn(
-                            f"{_cmd_link_display} is not on your PATH",
-                            "(add it to your shell config: export PATH=\"$HOME/.local/bin:$PATH\")"
-                        )
-                        manual_issues.append(f"Add {_cmd_link_display} to your PATH")
+                if _path_hermes_ok:
+                    check_ok(
+                        f"hermes found in PATH via {_path_hermes_dir}",
+                        f"(skipping {_cmd_link_display} symlink — not needed)",
+                    )
                 else:
-                    issues.append(f"Missing {_cmd_link_display}/hermes symlink — run 'hermes doctor --fix'")
+                    check_fail(
+                        f"{_cmd_link_display}/hermes not found",
+                        "(hermes command may not work outside the venv)"
+                    )
+                    if should_fix:
+                        _cmd_link_dir.mkdir(parents=True, exist_ok=True)
+                        _cmd_link.symlink_to(_venv_bin)
+                        check_ok(f"Created symlink: {_cmd_link_display}/hermes → {_venv_bin}")
+                        fixed_count += 1
+
+                        # Check if the link dir is on PATH
+                        _path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+                        if str(_cmd_link_dir) not in _path_dirs:
+                            check_warn(
+                                f"{_cmd_link_display} is not on your PATH",
+                                "(add it to your shell config: export PATH=\"$HOME/.local/bin:$PATH\")"
+                            )
+                            manual_issues.append(f"Add {_cmd_link_display} to your PATH")
+                    else:
+                        issues.append(f"Missing {_cmd_link_display}/hermes symlink — run 'hermes doctor --fix'")
 
     _section("External Tools")
     # Git

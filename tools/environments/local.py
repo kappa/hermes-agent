@@ -1226,8 +1226,12 @@ class LocalEnvironment(BaseEnvironment):
         if not _IS_WINDOWS:
             try:
                 proc._hermes_pgid = os.getpgid(proc.pid)
-            except ProcessLookupError:
-                pass
+            except (ProcessLookupError, PermissionError):
+                # PermissionError (EPERM) is raised on OpenBSD when calling
+                # os.getpgid() across session boundaries after os.setsid().
+                # After setsid() the process is its own session and group
+                # leader, so pgid == pid — use that as the fallback.
+                proc._hermes_pgid = proc.pid
 
         if stdin_data is not None:
             _pipe_stdin(proc, stdin_data)
@@ -1281,10 +1285,13 @@ class LocalEnvironment(BaseEnvironment):
             else:
                 try:
                     pgid = os.getpgid(proc.pid)
-                except ProcessLookupError:
-                    pgid = getattr(proc, "_hermes_pgid", None)
-                    if pgid is None:
-                        raise
+                except (ProcessLookupError, PermissionError):
+                    # PermissionError (EPERM): OpenBSD forbids cross-session
+                    # getpgid() for unprivileged processes.  Fall back to
+                    # the cached pgid from _run_bash; if that is missing
+                    # (shouldn't happen after the _run_bash fix above) use
+                    # proc.pid directly — after setsid() pgid == pid.
+                    pgid = getattr(proc, "_hermes_pgid", None) or proc.pid
 
                 try:
                     os.killpg(pgid, signal.SIGTERM)  # windows-footgun: ok — POSIX process-group SIGTERM (guarded by _IS_WINDOWS above)

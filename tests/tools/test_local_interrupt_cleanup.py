@@ -226,3 +226,91 @@ def test_wait_for_process_kills_subprocess_on_keyboardinterrupt():
             env.cleanup()
         except Exception:
             pass
+
+
+def test_run_bash_stores_pid_as_pgid_on_openbsd_eperm(monkeypatch):
+    """On OpenBSD, os.getpgid() after os.setsid() raises PermissionError (EPERM).
+
+    After os.setsid() the child is its own session and process-group leader,
+    so pgid == pid.  _run_bash must catch PermissionError and fall back to
+    proc.pid — not propagate the exception and wedge every subsequent call.
+
+    Regression test for obsd-10.
+    """
+    import subprocess as _subprocess
+    from types import SimpleNamespace
+
+    env = object.__new__(LocalEnvironment)
+
+    captured_pgid = []
+
+    original_popen = _subprocess.Popen
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            self.pid = 99999
+            self.stdout = None
+            self.stdin = None
+            self.returncode = None
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_getpgid(pid):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(_subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(os, "getpgid", fake_getpgid)
+    # Make _pipe_stdin a no-op
+    monkeypatch.setattr(
+        "tools.environments.local._pipe_stdin", lambda proc, data: None, raising=False
+    )
+
+    # _run_bash must not raise; proc._hermes_pgid must be set to proc.pid
+    env.cwd = "/tmp"
+    env.env = {}
+    proc = env._run_bash("echo hello")
+    assert getattr(proc, "_hermes_pgid", None) == proc.pid, (
+        f"expected _hermes_pgid == pid ({proc.pid}) on EPERM, "
+        f"got {getattr(proc, '_hermes_pgid', 'MISSING')}"
+    )
+
+
+def test_kill_process_uses_pid_as_pgid_on_openbsd_eperm(monkeypatch):
+    """On OpenBSD, os.getpgid() in _kill_process raises PermissionError (EPERM).
+
+    The fallback chain must use _hermes_pgid (set at spawn time to proc.pid
+    after the _run_bash EPERM fix) and send SIGTERM to that group.
+
+    Regression test for obsd-10.
+    """
+    env = object.__new__(LocalEnvironment)
+
+    # Simulate a process spawned on OpenBSD: _hermes_pgid == pid (not a real pgid)
+    proc = SimpleNamespace(
+        pid=22222,
+        _hermes_pgid=22222,
+        poll=lambda: 0,
+        kill=lambda: None,
+    )
+    killpg_calls = []
+
+    def fake_getpgid(_pid):
+        raise PermissionError(1, "Operation not permitted")
+
+    def fake_killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+        if sig == 0:
+            raise ProcessLookupError  # group already gone after SIGTERM
+
+    monkeypatch.setattr(os, "getpgid", fake_getpgid)
+    monkeypatch.setattr(os, "killpg", fake_killpg)
+
+    env._kill_process(proc)
+
+    assert killpg_calls[0] == (22222, signal.SIGTERM), (
+        f"expected SIGTERM to pgid 22222, got {killpg_calls}"
+    )

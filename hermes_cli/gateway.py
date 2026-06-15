@@ -4777,12 +4777,34 @@ def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False, fo
 
     from gateway.run import start_gateway
 
-    print("┌─────────────────────────────────────────────────────────┐")
-    print("│           ⚕ Hermes Gateway Starting...                 │")
-    print("├─────────────────────────────────────────────────────────┤")
-    print("│  Messaging platforms + cron scheduler                    │")
-    print("│  Press Ctrl+C to stop                                   │")
-    print("└─────────────────────────────────────────────────────────┘")
+    def _box_line(text: str, width: int, pad: str = " ") -> str:
+        """Return '│ <text> <padding> │' where padding fills to *width* display columns.
+
+        Uses wcwidth to measure display width so multi-byte characters (e.g.
+        emoji, box-drawing glyphs) do not throw off alignment.  Falls back to
+        len() when wcwidth is not available.
+        """
+        try:
+            from wcwidth import wcswidth as _wcswidth
+
+            def _displen(s: str) -> int:
+                w = _wcswidth(s)
+                return w if w >= 0 else len(s)
+        except ImportError:
+            _displen = len  # type: ignore[assignment]
+
+        inner = f" {text} "
+        padding = max(0, width - _displen(inner))
+        return f"│{inner}{pad * padding}│"
+
+    _BOX_WIDTH = 57  # interior columns between the two │ characters
+    _border_h = "─" * _BOX_WIDTH
+    print(f"┌{_border_h}┐")
+    print(_box_line("⚕ Hermes Gateway Starting...", _BOX_WIDTH))
+    print(f"├{_border_h}┤")
+    print(_box_line("Messaging platforms + cron scheduler", _BOX_WIDTH))
+    print(_box_line("Press Ctrl+C to stop", _BOX_WIDTH))
+    print(f"└{_border_h}┘")
     print()
 
     # Exit with code 1 if gateway fails to connect any platform,
